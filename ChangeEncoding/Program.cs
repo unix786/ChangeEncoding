@@ -19,6 +19,9 @@ namespace ChangeEncoding
                 string progressTotal = " of " + files.Length.ToString() + ".";
                 int i = 0;
                 string filePath;
+                Encoding encoding;
+                var targetEncoding = Encoding.UTF8;
+                var defaultEncoding = Encoding.GetEncoding(1251, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
                 while (i < files.Length)
                 {
                     filePath = files[i];
@@ -26,9 +29,23 @@ namespace ChangeEncoding
                     Console.Write("File " + String.Format(progressFormat, ++i) + progressTotal);
                     Console.WriteLine(": " + files[i]);
                     using (var file = File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
-                    using (var textReader = new StreamReader(,))
                     {
+                        encoding = GetEncodingFromBOM(file);
+                        if (encoding == targetEncoding)
+                            continue;
 
+                        string text;
+                        using (var reader = new StreamReader(file, encoding ?? defaultEncoding))
+                        using (var writer = new StreamWriter(file, targetEncoding))
+                        {
+                            text = reader.ReadToEnd();
+                            // cant dispose of reader, because it will close the stream.
+                            file.Position = 0;
+                            writer.Write(text);
+                            // https://stackoverflow.com/questions/8464261/filestream-and-streamwriter-how-to-truncate-the-remainder-of-the-file-after-wr
+                            writer.Flush();
+                            file.SetLength(file.Position);
+                        }
                     }
                 }
                 Console.WriteLine();
@@ -63,16 +80,24 @@ namespace ChangeEncoding
             switch (buffer[0])
             {
                 case 0xEF:
-                    if (bytesRead > 2 && buffer[1] == 0xbb && buffer[2] == 0xbf)
+                    if (bytesRead > 2 && buffer[1] == 0xBB && buffer[2] == 0xBF)
                         return Encoding.UTF8;
                     break;
-                case 0xFE:
-                    if (bytesRead > 1 && buffer[1] == 0xff)
+                case 0xFF:
+                    if (bytesRead > 1 && buffer[1] == 0xFE)
+                    {
+                        if (bytesRead > 3 && buffer[2] == 0x00 && buffer[3] == 0x00)
+                            return Encoding.UTF32;
                         return Encoding.Unicode;
+                    }
+                    break;
+                case 0xFE:
+                    if (bytesRead > 1 && buffer[1] == 0xFF)
+                        return Encoding.BigEndianUnicode;
                     break;
                 case 0x00:
-                    if (bytesRead > 3 && buffer[1] == 0x00 && buffer[2] == 0xfe && buffer[3] == 0xff)
-                        return Encoding.UTF32;
+                    if (bytesRead > 3 && buffer[1] == 0x00 && buffer[2] == 0xFE && buffer[3] == 0xFF)
+                        throw new NotSupportedException("UTF-32 big-endian");
                     break;
                 case 0x2B:
                     if (bytesRead > 2 && buffer[1] == 0x2f && buffer[2] == 0x76)
