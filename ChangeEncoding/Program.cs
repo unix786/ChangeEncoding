@@ -1,7 +1,6 @@
 ﻿using System;
-using System.Globalization;
-using System.Text;
 using System.IO;
+using System.Text;
 
 namespace ChangeEncoding
 {
@@ -11,9 +10,9 @@ namespace ChangeEncoding
         {
             try
             {
-                string dir = @"R:\Trunk";
+                string dir = @"C:\Projects\CE2006";
                 Console.WriteLine($"Checking \"{dir}\"...");
-                var files = Directory.GetFiles(dir, "*.cs", SearchOption.AllDirectories);
+                var files = Directory.GetFiles(dir, "*.resx", SearchOption.AllDirectories);
 
                 string progressFormat = "{0," + files.Length.ToString().Length + "}";
                 string progressTotal = " of " + files.Length.ToString() + ".";
@@ -22,33 +21,27 @@ namespace ChangeEncoding
                 Encoding encoding;
                 var targetEncoding = Encoding.UTF8;
                 var defaultEncoding = Encoding.GetEncoding(1251, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+                int t = 0;
                 while (i < files.Length)
                 {
                     filePath = files[i];
-                    Console.CursorLeft = 0;
+                    ClearLine();
                     Console.Write("File " + String.Format(progressFormat, ++i) + progressTotal);
-                    Console.WriteLine(": " + files[i]);
+                    Console.Write(": " + filePath);
                     using (var file = File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
                     {
                         encoding = GetEncodingFromBOM(file);
                         if (encoding == targetEncoding)
-                            continue;
-
-                        string text;
-                        using (var reader = new StreamReader(file, encoding ?? defaultEncoding))
-                        using (var writer = new StreamWriter(file, targetEncoding))
                         {
-                            text = reader.ReadToEnd();
-                            // cant dispose of reader, because it will close the stream.
-                            file.Position = 0;
-                            writer.Write(text);
-                            // https://stackoverflow.com/questions/8464261/filestream-and-streamwriter-how-to-truncate-the-remainder-of-the-file-after-wr
-                            writer.Flush();
-                            file.SetLength(file.Position);
+                            t++;
+                            continue;
                         }
+                        Console.WriteLine(". Converting...");
+                        //Convert(file, encoding ?? defaultEncoding, targetEncoding);
                     }
                 }
                 Console.WriteLine();
+                Console.WriteLine(t.ToString() + " of " + files.Length + " files had target encoding.");
             }
             catch (Exception ex)
             {
@@ -58,6 +51,31 @@ namespace ChangeEncoding
 
             Console.WriteLine("Press any key to exit...");
             Console.ReadKey(true);
+        }
+
+        private static void ClearLine()
+        {
+            //int cursor = Console.CursorLeft;
+            //Console.CursorLeft = 0;
+            //Console.Write(new string(' ', cursor));
+            //Console.CursorLeft = 0;
+            if(Console.CursorLeft > 0) Console.WriteLine();
+        }
+
+        private static void Convert(FileStream file, Encoding encoding, Encoding targetEncoding)
+        {
+            string text;
+            using (var reader = new StreamReader(file, encoding))
+            using (var writer = new StreamWriter(file, targetEncoding))
+            {
+                text = reader.ReadToEnd();
+                // cant dispose of reader, because it will close the stream.
+                file.Position = 0;
+                writer.Write(text);
+                // https://stackoverflow.com/questions/8464261/filestream-and-streamwriter-how-to-truncate-the-remainder-of-the-file-after-wr
+                writer.Flush();
+                file.SetLength(file.Position);
+            }
         }
 
         /// <summary>
