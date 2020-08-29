@@ -10,38 +10,73 @@ namespace ChangeEncoding
         {
             try
             {
-                string dir = @"C:\Projects\CE2006";
+                //string dir = @"C:\Projects\CE2006";
+                var dir = @"R:\SupportedSolutions\";
                 Console.WriteLine($"Checking \"{dir}\"...");
-                var files = Directory.GetFiles(dir, "*.resx", SearchOption.AllDirectories);
+                var files = Directory.GetFiles(dir, "*.cs", SearchOption.AllDirectories);
+                bool addBom = true;
+                bool convertNontargetFiles = false;
 
                 string progressFormat = "{0," + files.Length.ToString().Length + "}";
                 string progressTotal = " of " + files.Length.ToString() + ".";
                 int i = 0;
                 string filePath;
                 Encoding encoding;
+
                 var targetEncoding = Encoding.UTF8;
                 var defaultEncoding = Encoding.GetEncoding(1251, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+                if (!addBom && targetEncoding != Encoding.UTF8) throw new NotSupportedException("Cannot do non-BOM for chosen encoding.");
+
                 int t = 0;
+                int tc = 0;
+                int errors = 0;
+                bool hasUnicodeChars;
                 while (i < files.Length)
                 {
                     filePath = files[i];
                     ClearLine();
                     Console.Write("File " + String.Format(progressFormat, ++i) + progressTotal);
                     Console.Write(": " + filePath);
-                    using (var file = File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+                    try
                     {
-                        encoding = GetEncodingFromBOM(file);
-                        if (encoding == targetEncoding)
+                        using (var file = File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
                         {
-                            t++;
-                            continue;
+                            encoding = GetEncodingFromBOM(file);
+                            if (encoding == targetEncoding)
+                            {
+                                t++;
+                                continue;
+                            }
+                            else if (targetEncoding == Encoding.UTF8 && IsUTF8Compliant(file, out hasUnicodeChars))
+                            {
+                                if (hasUnicodeChars)
+                                {
+                                    t++;
+                                    tc++;
+                                    Console.WriteLine(". UTF8 compliant.");
+                                    if (addBom) Convert(file, targetEncoding, targetEncoding);
+                                    continue;
+                                }
+                                else
+                                {
+                                    // Probably an ASCII file without higher order characters.
+                                }
+                            }
+                            Console.WriteLine(". Converting...");
+                            if (convertNontargetFiles) Convert(file, encoding ?? defaultEncoding, addBom ? targetEncoding : null);
                         }
-                        Console.WriteLine(". Converting...");
-                        //Convert(file, encoding ?? defaultEncoding, targetEncoding);
+                    }
+                    catch (Exception ex)
+                    {
+                        errors++;
+                        Console.WriteLine();
+                        Console.WriteLine("! " + ex.GetType().Name + ": " + ex.Message);
                     }
                 }
                 Console.WriteLine();
                 Console.WriteLine(t.ToString() + " of " + files.Length + " files had target encoding.");
+                if (tc > 0) Console.WriteLine(tc.ToString() + " of the files had UTF8 characters without a BOM.");
+                if (errors > 0) Console.WriteLine("There were " + errors.ToString() + " errors.");
             }
             catch (Exception ex)
             {
@@ -59,14 +94,14 @@ namespace ChangeEncoding
             //Console.CursorLeft = 0;
             //Console.Write(new string(' ', cursor));
             //Console.CursorLeft = 0;
-            if(Console.CursorLeft > 0) Console.WriteLine();
+            if (Console.CursorLeft > 0) Console.WriteLine();
         }
 
         private static void Convert(FileStream file, Encoding encoding, Encoding targetEncoding)
         {
             string text;
             using (var reader = new StreamReader(file, encoding))
-            using (var writer = new StreamWriter(file, targetEncoding))
+            using (var writer = targetEncoding == null ? new StreamWriter(file) : new StreamWriter(file, targetEncoding))
             {
                 text = reader.ReadToEnd();
                 // cant dispose of reader, because it will close the stream.
@@ -123,6 +158,53 @@ namespace ChangeEncoding
                     break;
             }
             return null;
+        }
+
+        public static bool IsUTF8Compliant(Stream stream, out bool hasUnicodeChars)
+        {
+            long initialPosition = stream.Position;
+            try
+            {
+                byte b;
+                hasUnicodeChars = false;
+                int expectedBytes = 0;
+                while (stream.Position < stream.Length)
+                {
+                    b = (byte)stream.ReadByte();
+                    if ((b & (1 << 7)) == 0)
+                    {
+                        if (expectedBytes > 0)
+                            return false;
+                    }
+                    else
+                    {
+                        if (expectedBytes > 0)
+                        {
+                            if ((b & (1 << 6)) != 0)
+                                return false;
+                            expectedBytes -= 1;
+                        }
+                        else
+                        {
+                            int p;
+                            for (p = 6; p >= 0 && (b & (1 << p)) != 0; p--) ;
+                            expectedBytes = 6 - p;
+                            if (expectedBytes == 0 || expectedBytes > 3)
+                                return false;
+                            hasUnicodeChars = true;
+                        }
+                    }
+                }
+                if (expectedBytes == 0)
+                    return true;
+
+                hasUnicodeChars = false;
+                return false;
+            }
+            finally
+            {
+                stream.Position = initialPosition;
+            }
         }
     }
 }
