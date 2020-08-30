@@ -10,12 +10,11 @@ namespace ChangeEncoding
         {
             try
             {
-                //string dir = @"C:\Projects\CE2006";
-                var dir = @"R:\SupportedSolutions\";
+                string dir = @"C:\Projects\CE2006";
                 Console.WriteLine($"Checking \"{dir}\"...");
                 var files = Directory.GetFiles(dir, "*.cs", SearchOption.AllDirectories);
-                bool addBom = true;
-                bool convertNontargetFiles = false;
+                bool addBom = false;
+                bool convertNontargetFiles = true;
 
                 string progressFormat = "{0," + files.Length.ToString().Length + "}";
                 string progressTotal = " of " + files.Length.ToString() + ".";
@@ -49,9 +48,9 @@ namespace ChangeEncoding
                             }
                             else if (targetEncoding == Encoding.UTF8 && IsUTF8Compliant(file, out hasUnicodeChars))
                             {
+                                t++;
                                 if (hasUnicodeChars)
                                 {
-                                    t++;
                                     tc++;
                                     Console.WriteLine(". UTF8 compliant.");
                                     if (addBom) Convert(file, targetEncoding, targetEncoding);
@@ -74,7 +73,7 @@ namespace ChangeEncoding
                     }
                 }
                 Console.WriteLine();
-                Console.WriteLine(t.ToString() + " of " + files.Length + " files had target encoding.");
+                Console.WriteLine((t == files.Length ? "All" : t.ToString()) + " of " + files.Length + " files had target encoding.");
                 if (tc > 0) Console.WriteLine(tc.ToString() + " of the files had UTF8 characters without a BOM.");
                 if (errors > 0) Console.WriteLine("There were " + errors.ToString() + " errors.");
             }
