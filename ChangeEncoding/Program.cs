@@ -10,11 +10,12 @@ namespace ChangeEncoding
         {
             try
             {
-                string dir = @"C:\Projects\CE2006";
+                string dir = @"E:\SupportedSolutions\";
                 Console.WriteLine($"Checking \"{dir}\"...");
                 var files = Directory.GetFiles(dir, "*.cs", SearchOption.AllDirectories);
                 bool addBom = false;
                 bool convertNontargetFiles = true;
+                bool checkAndFixExistingUtfFiles = true;
 
                 string progressFormat = "{0," + files.Length.ToString().Length + "}";
                 string progressTotal = " of " + files.Length.ToString() + ".";
@@ -44,6 +45,7 @@ namespace ChangeEncoding
                             if (encoding == targetEncoding)
                             {
                                 t++;
+                                if (checkAndFixExistingUtfFiles && encoding == Encoding.UTF8) CheckAndFixUtfFile(file, defaultEncoding);
                                 continue;
                             }
                             else if (targetEncoding == Encoding.UTF8 && IsUTF8Compliant(file, out hasUnicodeChars))
@@ -106,10 +108,15 @@ namespace ChangeEncoding
                 // cant dispose of reader, because it will close the stream.
                 file.Position = 0;
                 writer.Write(text);
-                // https://stackoverflow.com/questions/8464261/filestream-and-streamwriter-how-to-truncate-the-remainder-of-the-file-after-wr
-                writer.Flush();
-                file.SetLength(file.Position);
+                EndWriteAndTrim(file, writer);
             }
+        }
+
+        private static void EndWriteAndTrim(FileStream file, StreamWriter writer)
+        {
+            // https://stackoverflow.com/questions/8464261/filestream-and-streamwriter-how-to-truncate-the-remainder-of-the-file-after-wr
+            writer.Flush();
+            file.SetLength(file.Position);
         }
 
         /// <summary>
@@ -159,7 +166,111 @@ namespace ChangeEncoding
             return null;
         }
 
-        public static bool IsUTF8Compliant(Stream stream, out bool hasUnicodeChars)
+        /// <summary>
+        /// Fixes UTF8 files that have ASCII (<paramref name="defaultEncoding"/>) mixed into them.
+        /// </summary>
+        /// <param name="file"></param>
+        /// <param name="defaultEncoding">Encoding of the non-UTF parts.</param>
+        private static void CheckAndFixUtfFile(FileStream file, Encoding defaultEncoding)
+        {
+            if (IsUTF8Compliant(file, out _, stopAtFault: true))
+                return;
+
+            Console.Write(". Possible mixed encoding. Attempting to fix.");
+            int remainingBytes = (int)(file.Length - file.Position);
+            using (var reader = new StreamReader(file, defaultEncoding))
+            using (var memory = new MemoryStream(2 * remainingBytes))
+            using (var memoryWriter = new StreamWriter(memory))
+            {
+                long firstFaultPosition = file.Position;
+                var faultPosition = firstFaultPosition;
+                long nextFaultPosition, faultEndPosition;
+                byte b;
+                bool skipHighOrderChars = true;
+                do
+                {
+                    do
+                    {
+                        b = (byte)file.ReadByte();
+                        if ((b & (1 << 7)) == 0)
+                        {
+                            skipHighOrderChars = false;
+                            continue;
+                        }
+
+                        if (skipHighOrderChars)
+                            continue;
+
+                        faultEndPosition = file.Seek(-1, SeekOrigin.Current);
+                        if (IsUTF8Compliant(file, out _, stopAtFault: true))
+                        {
+                            ConvertChunk(file, faultPosition, faultEndPosition, reader, memoryWriter);
+                            memoryWriter.Flush();
+                            // The rest of the file is UTF8. Doing raw copy of bytes.
+                            file.CopyTo(memory);
+
+                            WriteFromMemory(file, memory, firstFaultPosition);
+                            // No need to trim the file, because the size likely increased.
+                            return;
+                        }
+                        else
+                        {
+                            if (faultEndPosition < file.Position)
+                            {
+                                // Convert chunk and copy some more bytes without converting.
+                                nextFaultPosition = file.Position;
+                                ConvertChunk(file, faultPosition, faultEndPosition, reader, memoryWriter);
+                                // Flushing, because the next write will bypass this writer.
+                                memoryWriter.Flush();
+                                var buffer = new byte[nextFaultPosition - file.Position];
+                                file.Read(buffer, 0, buffer.Length);
+                                memory.Write(buffer, 0, buffer.Length);
+                                faultPosition = file.Position;
+                            }
+                            skipHighOrderChars = true;
+                        }
+                    } while (file.Position < file.Length);
+                } while (file.Position < file.Length);
+
+                // The rest of the file needs to be converted.
+                file.Position = faultPosition;
+                reader.DiscardBufferedData();
+                var text = reader.ReadToEnd();
+                if(memory.Position > 0)
+                {
+                    // Some of the file has already been converted.
+                    WriteFromMemory(file, memory, firstFaultPosition);
+                }
+                else
+                {
+                    // Here: faultPosition == firstFaultPosition
+                    file.Position = faultPosition;
+                }
+                memoryWriter.Write(text);
+                // No need to trim the file, because the size likely increased.
+            }
+        }
+
+        private static void WriteFromMemory(FileStream file, MemoryStream memory, long fileStartPosition)
+        {
+            memory.Position = 0;
+            file.Position = fileStartPosition;
+            memory.CopyTo(file);
+        }
+
+        private static void ConvertChunk(FileStream file, long faultPosition, long faultEndPosition, StreamReader reader, StreamWriter writer)
+        {
+            var buffer = new char[faultEndPosition - faultPosition];
+            file.Position = faultPosition;
+            reader.DiscardBufferedData();
+            reader.Read(buffer, 0, buffer.Length);
+            // StreamReader tends to read ahead, so need to reposition the stream.
+            file.Position = faultEndPosition;
+            reader.DiscardBufferedData();
+            writer.Write(buffer);
+        }
+
+        public static bool IsUTF8Compliant(Stream stream, out bool hasUnicodeChars, bool stopAtFault = false)
         {
             long initialPosition = stream.Position;
             try
@@ -185,6 +296,7 @@ namespace ChangeEncoding
                         }
                         else
                         {
+                            if (stopAtFault) initialPosition = stream.Position - 1;
                             int p;
                             for (p = 6; p >= 0 && (b & (1 << p)) != 0; p--) ;
                             expectedBytes = 6 - p;
